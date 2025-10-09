@@ -4,6 +4,7 @@ import base64
 import time
 import re
 import json
+import random
 from email.mime.text import MIMEText
 from google_auth_oauthlib.flow import Flow
 from google.oauth2.credentials import Credentials
@@ -180,7 +181,7 @@ Thanks,
     # ========================================
     st.header("🏷️ Label & Timing Options")
     label_name = st.text_input("Gmail label to apply (new emails only)", value="Mail Merge Sent")
-    delay = st.number_input("Delay between emails (seconds)", min_value=0, max_value=60, value=2, step=1)
+    delay = st.number_input("Delay between emails (seconds)", min_value=0, max_value=90, value=60, step=5)
 
     # ========================================
     # Send Mode
@@ -193,6 +194,13 @@ Thanks,
         skipped, errors = [], []
 
         with st.spinner("📨 Sending emails... please wait."):
+
+            # Ensure columns exist
+            if "ThreadId" not in df.columns:
+                df["ThreadId"] = None
+            if "RfcMessageId" not in df.columns:
+                df["RfcMessageId"] = None
+
             for idx, row in df.iterrows():
                 to_addr = extract_email(str(row.get("Email", "")).strip())
                 if not to_addr:
@@ -231,25 +239,31 @@ Thanks,
                     # Send the email
                     sent_msg = service.users().messages().send(userId="me", body=msg_body).execute()
 
-                    # ✅ FIX: Wait & Retry to Fetch RFC Message-ID
-                    time.sleep(1.5)
+                    # ✅ Improved RFC Message-ID Fetch
                     message_id_header = None
-                    for attempt in range(3):
-                        msg_detail = service.users().messages().get(
-                            userId="me",
-                            id=sent_msg["id"],
-                            format="metadata",
-                            metadataHeaders=["Message-ID"],
-                        ).execute()
+                    for attempt in range(5):
+                        time.sleep(random.uniform(1.5, 3.0))
+                        try:
+                            msg_detail = service.users().messages().get(
+                                userId="me",
+                                id=sent_msg["id"],
+                                format="metadata",
+                                metadataHeaders=["Message-ID"],
+                            ).execute()
 
-                        message_id_header = next(
-                            (h["value"] for h in msg_detail.get("payload", {}).get("headers", [])
-                             if h["name"] == "Message-ID"),
-                            None,
-                        )
-                        if message_id_header:
-                            break
-                        time.sleep(1.5)
+                            message_id_header = next(
+                                (h["value"] for h in msg_detail.get("payload", {}).get("headers", [])
+                                 if h["name"].lower() == "message-id"),
+                                None,
+                            )
+
+                            if message_id_header:
+                                break
+                        except Exception as e:
+                            st.warning(f"Attempt {attempt+1} failed to fetch Message-ID: {e}")
+
+                    if not message_id_header:
+                        st.warning(f"⚠️ Message-ID not found for {to_addr} (will remain blank).")
 
                     # Apply label for new emails only
                     if send_mode == "🆕 New Email" and label_id:
@@ -260,11 +274,7 @@ Thanks,
                             body={"addLabelIds": [label_id]},
                         ).execute()
 
-                    # ===== Save ThreadId + Real Message-ID =====
-                    if "ThreadId" not in df.columns:
-                        df["ThreadId"] = None
-                    if "RfcMessageId" not in df.columns:
-                        df["RfcMessageId"] = None
+                    # Save data back to DataFrame
                     df.loc[idx, "ThreadId"] = sent_msg.get("threadId", "")
                     df.loc[idx, "RfcMessageId"] = message_id_header or ""
 

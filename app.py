@@ -12,182 +12,239 @@ from googleapiclient.discovery import build
 # ========================================
 # Streamlit Page Setup
 # ========================================
-st.set_page_config(page_title="📧 Gmail Mail Merge + Follow-ups", layout="wide")
-st.title("📧 Gmail Mail Merge Tool (with Follow-up Replies)")
+st.set_page_config(page_title="Gmail Mail Merge", layout="wide")
+st.title("📧 Gmail Mail Merge Tool (with Follow-up Support)")
 
 # ========================================
-# Utility Functions
+# Gmail API Setup
 # ========================================
-def extract_email(text):
-    """Extracts a valid email address from a string."""
-    match = re.search(r"[\w\.-]+@[\w\.-]+\.\w+", text)
+SCOPES = [
+    "https://www.googleapis.com/auth/gmail.send",
+    "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/gmail.labels",
+]
+
+CLIENT_CONFIG = {
+    "web": {
+        "client_id": st.secrets["gmail"]["client_id"],
+        "client_secret": st.secrets["gmail"]["client_secret"],
+        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+        "token_uri": "https://oauth2.googleapis.com/token",
+        "redirect_uris": [st.secrets["gmail"]["redirect_uri"]],
+    }
+}
+
+# ========================================
+# Smart Email Extractor
+# ========================================
+EMAIL_REGEX = re.compile(r"[\w\.-]+@[\w\.-]+\.\w+")
+
+def extract_email(value: str):
+    if not value:
+        return None
+    match = EMAIL_REGEX.search(str(value))
     return match.group(0) if match else None
 
+# ========================================
+# Gmail Label Helper
+# ========================================
+def get_or_create_label(service, label_name="Mail Merge Sent"):
+    try:
+        labels = service.users().labels().list(userId="me").execute().get("labels", [])
+        for label in labels:
+            if label["name"].lower() == label_name.lower():
+                return label["id"]
 
-def get_header_value(headers, key):
-    """Extract a specific header value from Gmail message."""
-    for h in headers:
-        if h.get("name", "").lower() == key.lower():
-            return h.get("value")
-    return None
+        label_obj = {
+            "name": label_name,
+            "labelListVisibility": "labelShow",
+            "messageListVisibility": "show",
+        }
+        created_label = service.users().labels().create(userId="me", body=label_obj).execute()
+        return created_label["id"]
 
+    except Exception as e:
+        st.warning(f"Could not get/create label: {e}")
+        return None
 
+# ========================================
+# Bold + Link Converter
+# ========================================
 def convert_bold(text):
-    """Convert *bold* syntax in plain text to <b> tags for HTML."""
-    return re.sub(r"\*(.*?)\*", r"<b>\1</b>", text)
-
-
-def get_or_create_label(service, label_name="MailMergeSent"):
-    """Create or get Gmail label for sent messages."""
-    labels = service.users().labels().list(userId="me").execute()
-    existing = [l for l in labels.get("labels", []) if l["name"] == label_name]
-    if existing:
-        return existing[0]["id"]
-    new_label = service.users().labels().create(
-        userId="me", body={"name": label_name}
-    ).execute()
-    return new_label["id"]
-
+    """
+    Converts **bold** syntax and [text](url) to working HTML.
+    Preserves spacing, line breaks, and Gmail-style link formatting.
+    """
+    if not text:
+        return ""
+    text = re.sub(r"\*\*(.*?)\*\*", r"<b>\1</b>", text)
+    text = re.sub(
+        r"\[(.*?)\]\((https?://[^\s)]+)\)",
+        r'<a href="\2" style="color:#1a73e8; text-decoration:underline;" target="_blank">\1</a>',
+        text,
+    )
+    text = text.replace("\n", "<br>").replace("  ", "&nbsp;&nbsp;")
+    return f"""
+    <html>
+        <body style="font-family: Arial, sans-serif; font-size: 14px; line-height: 1.6;">
+            {text}
+        </body>
+    </html>
+    """
 
 # ========================================
-# Gmail Authentication
+# OAuth Flow
 # ========================================
-st.sidebar.header("🔐 Gmail Authentication")
+if "creds" not in st.session_state:
+    st.session_state["creds"] = None
 
-if "credentials" not in st.session_state:
-    st.session_state["credentials"] = None
-
-uploaded_creds = st.sidebar.file_uploader("Upload your Gmail client_secret.json", type=["json"])
-
-if uploaded_creds:
-    creds_data = json.load(uploaded_creds)
-    st.session_state["creds_data"] = creds_data
-
-redirect_uri = "http://localhost:8501"
-
-if "credentials" not in st.session_state or not st.session_state["credentials"]:
-    if st.sidebar.button("🔗 Authenticate with Gmail"):
-        flow = Flow.from_client_config(
-            st.session_state["creds_data"],
-            scopes=[
-                "https://www.googleapis.com/auth/gmail.send",
-                "https://www.googleapis.com/auth/gmail.modify",
-                "https://www.googleapis.com/auth/gmail.readonly",
-            ],
-            redirect_uri=redirect_uri,
-        )
-        auth_url, _ = flow.authorization_url(prompt="consent")
-        st.sidebar.markdown(f"[Click to authorize Gmail access]({auth_url})")
+if st.session_state["creds"]:
+    creds = Credentials.from_authorized_user_info(
+        json.loads(st.session_state["creds"]), SCOPES
+    )
 else:
-    st.sidebar.success("✅ Gmail authenticated")
+    code = st.experimental_get_query_params().get("code", None)
+    if code:
+        flow = Flow.from_client_config(CLIENT_CONFIG, scopes=SCOPES)
+        flow.redirect_uri = st.secrets["gmail"]["redirect_uri"]
+        flow.fetch_token(code=code[0])
+        creds = flow.credentials
+        st.session_state["creds"] = creds.to_json()
+        st.rerun()
+    else:
+        flow = Flow.from_client_config(CLIENT_CONFIG, scopes=SCOPES)
+        flow.redirect_uri = st.secrets["gmail"]["redirect_uri"]
+        auth_url, _ = flow.authorization_url(
+            prompt="consent", access_type="offline", include_granted_scopes="true"
+        )
+        st.markdown(
+            f"### 🔑 Please [authorize the app]({auth_url}) to send emails using your Gmail account."
+        )
+        st.stop()
+
+# Build Gmail API client
+creds = Credentials.from_authorized_user_info(json.loads(st.session_state["creds"]), SCOPES)
+service = build("gmail", "v1", credentials=creds)
 
 # ========================================
-# File Upload and Preview
+# Upload Recipients
 # ========================================
-st.header("📤 Upload Recipient List (with optional Thread Info)")
-
+st.header("📤 Upload Recipient List")
 uploaded_file = st.file_uploader("Upload CSV or Excel file", type=["csv", "xlsx"])
+
 if uploaded_file:
     if uploaded_file.name.endswith("csv"):
         df = pd.read_csv(uploaded_file)
     else:
         df = pd.read_excel(uploaded_file)
 
-    # Ensure thread-tracking columns exist
-    for col in ["ThreadId", "RfcMessageId", "LastSentDate", "Status"]:
-        if col not in df.columns:
-            df[col] = ""
-
+    st.write("✅ Preview of uploaded data:")
     st.dataframe(df.head())
 
-    # ========================================
-    # Email Composition
-    # ========================================
-    st.subheader("✉️ Compose Your Email")
+    st.info("📌 Include a 'ThreadId' column if you want to send follow-ups as replies.")
 
-    subject_template = st.text_input("Subject (use {Name} etc. for placeholders):")
+    # ========================================
+    # Email Template
+    # ========================================
+    st.header("✍️ Compose Your Email")
+    subject_template = st.text_input("Subject", "Hello {Name}")
     body_template = st.text_area(
-        "Email Body (supports *bold* and {placeholders})",
-        height=200,
+        "Body (supports **bold**, [link](https://example.com), and line breaks)",
+        """Dear {Name},
+
+Welcome to our **Mail Merge App** demo.
+
+You can add links like [Visit Google](https://google.com)
+and preserve formatting exactly.
+
+Thanks,  
+**Your Company**""",
+        height=250,
     )
 
-    delay = st.number_input("Delay between emails (seconds)", 0.5, 10.0, 2.0)
+    # ========================================
+    # Preview Section
+    # ========================================
+    st.subheader("👁️ Preview Email")
+    if not df.empty:
+        recipient_options = df["Email"].astype(str).tolist()
+        selected_email = st.selectbox("Select recipient to preview", recipient_options)
+        try:
+            preview_row = df[df["Email"] == selected_email].iloc[0]
+            preview_subject = subject_template.format(**preview_row)
+            preview_body = body_template.format(**preview_row)
+            preview_html = convert_bold(preview_body)
+            st.markdown(f"**Subject:** {preview_subject}")
+            st.markdown("---")
+            st.markdown(preview_html, unsafe_allow_html=True)
+        except KeyError as e:
+            st.error(f"⚠️ Missing column in data: {e}")
+
+    # ========================================
+    # Label & Delay Options
+    # ========================================
+    st.header("🏷️ Label & Timing Options")
+    label_name = st.text_input("Gmail label to apply", value="Mail Merge Sent")
+    delay = st.number_input("Delay between emails (seconds)", min_value=0, max_value=60, value=2, step=1)
+
+    # ========================================
+    # Send or Follow-up
+    # ========================================
+    send_mode = st.radio("Choose sending mode", ["🆕 New Email", "↩️ Follow-up (Reply)"])
 
     if st.button("🚀 Send Emails"):
-        try:
-            st.info("Authenticating Gmail...")
-            creds = Credentials.from_authorized_user_file("token.json")
-            service = build("gmail", "v1", credentials=creds)
-            label_id = get_or_create_label(service, "MailMergeSent")
+        label_id = get_or_create_label(service, label_name)
+        sent_count = 0
+        skipped, errors = [], []
 
-            sent_count, errors = 0, []
-
-            progress = st.progress(0)
+        with st.spinner("📨 Sending emails... please wait."):
             for idx, row in df.iterrows():
                 to_addr = extract_email(str(row.get("Email", "")).strip())
                 if not to_addr:
+                    skipped.append(row.get("Email"))
                     continue
 
                 try:
                     subject = subject_template.format(**row)
-                    body_text = body_template.format(**row)
-                    html_body = convert_bold(body_text)
+                    body_html = convert_bold(body_template.format(**row))
 
-                    message = MIMEText(html_body, "html")
-                    message["To"] = to_addr
-                    message["Subject"] = subject
-
-                    # Base64 encode
+                    message = MIMEText(body_html, "html")
+                    message["to"] = to_addr
+                    message["subject"] = subject
                     raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
                     msg_body = {"raw": raw}
 
-                    # If ThreadId exists → treat as follow-up (reply)
-                    thread_id = str(row.get("ThreadId", "")).strip()
-                    rfc_message_id = str(row.get("RfcMessageId", "")).strip()
+                    if send_mode == "↩️ Follow-up (Reply)" and "ThreadId" in row:
+                        thread_id = str(row["ThreadId"]).strip()
+                        if thread_id and thread_id != "nan":
+                            msg_body["threadId"] = thread_id
 
-                    if thread_id:
-                        if rfc_message_id:
-                            message["In-Reply-To"] = rfc_message_id
-                            message["References"] = rfc_message_id
-                        msg_body["threadId"] = thread_id
-                        raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
-                        msg_body["raw"] = raw
-
-                    # Send email
                     sent_msg = service.users().messages().send(userId="me", body=msg_body).execute()
 
-                    # Fetch message headers
-                    full = service.users().messages().get(
-                        userId="me", id=sent_msg["id"], format="full"
-                    ).execute()
-                    headers = full.get("payload", {}).get("headers", [])
-                    new_rfc_id = get_header_value(headers, "Message-ID")
+                    if label_id:
+                        service.users().messages().modify(
+                            userId="me", id=sent_msg["id"], body={"addLabelIds": [label_id]}
+                        ).execute()
 
-                    # Update DataFrame
-                    df.at[idx, "ThreadId"] = sent_msg.get("threadId")
-                    df.at[idx, "RfcMessageId"] = new_rfc_id
-                    df.at[idx, "LastSentDate"] = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
-                    df.at[idx, "Status"] = "Sent"
+                    # Save Thread ID back if new message
+                    if "ThreadId" not in df.columns:
+                        df["ThreadId"] = None
+                    df.loc[idx, "ThreadId"] = sent_msg.get("threadId", "")
 
                     sent_count += 1
-                    progress.progress(sent_count / len(df))
                     time.sleep(delay)
 
                 except Exception as e:
-                    df.at[idx, "Status"] = "Failed"
                     errors.append((to_addr, str(e)))
 
-            st.success(f"✅ Sent {sent_count} emails successfully.")
-            if errors:
-                st.error(f"❌ {len(errors)} failed. Check logs or retry later.")
+        # ========================================
+        # Summary + Thread ID Export
+        # ========================================
+        st.success(f"✅ Successfully sent {sent_count} emails.")
+        if skipped:
+            st.warning(f"⚠️ Skipped {len(skipped)} invalid emails: {skipped}")
+        if errors:
+            st.error(f"❌ Failed to send {len(errors)} emails: {errors}")
 
-            csv_data = df.to_csv(index=False).encode("utf-8")
-            st.download_button(
-                label="📥 Download Updated CSV (with Thread IDs)",
-                data=csv_data,
-                file_name="recipients_updated.csv",
-                mime="text/csv",
-            )
-
-        except Exception as e:
-            st.error(f"⚠️ Error: {e}")
+        csv = df.to_csv(index=False).encode("utf-8")
+        st.download_button("⬇️ Download Updated CSV (with Thread IDs)", csv, "updated_mailmerge.csv", "text/csv")

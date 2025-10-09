@@ -13,7 +13,7 @@ from googleapiclient.discovery import build
 # Streamlit Page Setup
 # ========================================
 st.set_page_config(page_title="Gmail Mail Merge", layout="wide")
-st.title("📧 Gmail Mail Merge Tool (with Follow-up Support)")
+st.title("📧 Gmail Mail Merge Tool (with Follow-up Replies)")
 
 # ========================================
 # Gmail API Setup
@@ -136,7 +136,7 @@ if uploaded_file:
 
     st.write("✅ Preview of uploaded data:")
     st.dataframe(df.head())
-    st.info("📌 Include 'ThreadId' and 'RfcMessageId' for follow-ups if needed.")
+    st.info("📌 Include 'ThreadId' and 'RfcMessageId' columns for follow-ups if needed.")
 
     # ========================================
     # Email Template
@@ -201,40 +201,44 @@ Thanks,
 
                 try:
                     subject = subject_template.format(**row)
+                    body_html = convert_bold(body_template.format(**row))
 
-                    # ===== MIME message for new or reply =====
+                    # ===== New email or follow-up =====
+                    message = MIMEText(body_html, "html")
+                    message["To"] = to_addr
+                    message["Subject"] = subject
+
+                    msg_body = {}
+
                     if send_mode == "↩️ Follow-up (Reply)" and "ThreadId" in row and "RfcMessageId" in row:
                         thread_id = str(row["ThreadId"]).strip()
                         rfc_id = str(row["RfcMessageId"]).strip()
-                        message = MIMEText(convert_bold(body_template.format(**row)), "html")
-                        message["To"] = to_addr
-                        message["Subject"] = subject
 
                         if thread_id and thread_id != "nan" and rfc_id:
                             message["In-Reply-To"] = rfc_id
                             message["References"] = rfc_id
-
-                        raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
-                        msg_body = {"raw": raw}
-                        if thread_id and thread_id != "nan":
-                            msg_body["threadId"] = thread_id
-
-                        # Send follow-up (no label)
-                        sent_msg = service.users().messages().send(userId="me", body=msg_body).execute()
-
+                            raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
+                            msg_body = {"raw": raw, "threadId": thread_id}
+                        else:
+                            # Fallback to new email
+                            raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
+                            msg_body = {"raw": raw}
+                            if label_id:
+                                # Label will be applied after send
+                                pass
                     else:
-                        # ===== New email =====
-                        message = MIMEText(convert_bold(body_template.format(**row)), "html")
-                        message["To"] = to_addr
-                        message["Subject"] = subject
+                        # New email
                         raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
                         msg_body = {"raw": raw}
-                        sent_msg = service.users().messages().send(userId="me", body=msg_body).execute()
-                        # Apply label only for new emails
-                        if label_id:
-                            service.users().messages().modify(
-                                userId="me", id=sent_msg["id"], body={"addLabelIds": [label_id]}
-                            ).execute()
+
+                    # Send email
+                    sent_msg = service.users().messages().send(userId="me", body=msg_body).execute()
+
+                    # Apply label for new emails only
+                    if send_mode == "🆕 New Email" and label_id:
+                        service.users().messages().modify(
+                            userId="me", id=sent_msg["id"], body={"addLabelIds": [label_id]}
+                        ).execute()
 
                     # ===== Save ThreadId + Message-ID to CSV =====
                     if "ThreadId" not in df.columns:

@@ -73,15 +73,12 @@ def get_or_create_label(service, label_name="Mail Merge Sent"):
 def convert_bold(text):
     if not text:
         return ""
-    # Convert **bold**
     text = re.sub(r"\*\*(.*?)\*\*", r"<b>\1</b>", text)
-    # Convert [text](url)
     text = re.sub(
         r"\[(.*?)\]\((https?://[^\s)]+)\)",
         r'<a href="\2" style="color:#1a73e8; text-decoration:underline;" target="_blank">\1</a>',
         text,
     )
-    # Preserve line breaks
     text = text.replace("\n", "<br>").replace("  ", "&nbsp;&nbsp;")
     return f"""
     <html>
@@ -139,7 +136,7 @@ if uploaded_file:
 
     st.write("✅ Preview of uploaded data:")
     st.dataframe(df.head())
-    st.info("📌 Include a 'ThreadId' and 'RfcMessageId' column for follow-ups if needed.")
+    st.info("📌 Include 'ThreadId' and 'RfcMessageId' for follow-ups if needed.")
 
     # ========================================
     # Email Template
@@ -204,41 +201,42 @@ Thanks,
 
                 try:
                     subject = subject_template.format(**row)
-                    body_html = convert_bold(body_template.format(**row))
-                    message = MIMEText(body_html, "html")
-                    message["to"] = to_addr
-                    message["subject"] = subject
 
-                    # ===== Follow-up threading =====
-                    raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
-                    msg_body = {"raw": raw}
-
+                    # ===== MIME message for new or reply =====
                     if send_mode == "↩️ Follow-up (Reply)" and "ThreadId" in row and "RfcMessageId" in row:
                         thread_id = str(row["ThreadId"]).strip()
                         rfc_id = str(row["RfcMessageId"]).strip()
+                        message = MIMEText(convert_bold(body_template.format(**row)), "html")
+                        message["To"] = to_addr
+                        message["Subject"] = subject
+
+                        if thread_id and thread_id != "nan" and rfc_id:
+                            message["In-Reply-To"] = rfc_id
+                            message["References"] = rfc_id
+
+                        raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
+                        msg_body = {"raw": raw}
                         if thread_id and thread_id != "nan":
                             msg_body["threadId"] = thread_id
-                            if rfc_id:
-                                message["In-Reply-To"] = rfc_id
-                                message["References"] = rfc_id
-                            # Skip labeling for replies
-                            sent_msg = service.users().messages().send(userId="me", body=msg_body).execute()
-                        else:
-                            # Treat as new email if no thread info
-                            sent_msg = service.users().messages().send(userId="me", body=msg_body).execute()
-                            if label_id:
-                                service.users().messages().modify(
-                                    userId="me", id=sent_msg["id"], body={"addLabelIds": [label_id]}
-                                ).execute()
+
+                        # Send follow-up (no label)
+                        sent_msg = service.users().messages().send(userId="me", body=msg_body).execute()
+
                     else:
                         # ===== New email =====
+                        message = MIMEText(convert_bold(body_template.format(**row)), "html")
+                        message["To"] = to_addr
+                        message["Subject"] = subject
+                        raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
+                        msg_body = {"raw": raw}
                         sent_msg = service.users().messages().send(userId="me", body=msg_body).execute()
+                        # Apply label only for new emails
                         if label_id:
                             service.users().messages().modify(
                                 userId="me", id=sent_msg["id"], body={"addLabelIds": [label_id]}
                             ).execute()
 
-                    # Save Thread ID and Message-ID back to CSV
+                    # ===== Save ThreadId + Message-ID to CSV =====
                     if "ThreadId" not in df.columns:
                         df["ThreadId"] = None
                     if "RfcMessageId" not in df.columns:

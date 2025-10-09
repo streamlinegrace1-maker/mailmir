@@ -239,10 +239,10 @@ Thanks,
                     # Send the email
                     sent_msg = service.users().messages().send(userId="me", body=msg_body).execute()
 
-                    # ✅ Improved RFC Message-ID Fetch
+                    # ✅ FINAL FIX: Reliable RFC Message-ID Fetch
                     message_id_header = None
-                    for attempt in range(5):
-                        time.sleep(random.uniform(1.5, 3.0))
+                    for attempt in range(8):
+                        time.sleep(random.uniform(2, 4))  # wait longer
                         try:
                             msg_detail = service.users().messages().get(
                                 userId="me",
@@ -259,11 +259,34 @@ Thanks,
 
                             if message_id_header:
                                 break
+
+                            # 🔁 fallback: search by thread if still missing
+                            thread_messages = service.users().messages().list(
+                                userId="me",
+                                q=f"threadid:{sent_msg['threadId']}",
+                                maxResults=1
+                            ).execute().get("messages", [])
+                            if thread_messages:
+                                m_id = thread_messages[0]["id"]
+                                msg_info = service.users().messages().get(
+                                    userId="me",
+                                    id=m_id,
+                                    format="metadata",
+                                    metadataHeaders=["Message-ID"],
+                                ).execute()
+                                message_id_header = next(
+                                    (h["value"] for h in msg_info.get("payload", {}).get("headers", [])
+                                     if h["name"].lower() == "message-id"),
+                                    None,
+                                )
+                                if message_id_header:
+                                    break
+
                         except Exception as e:
                             st.warning(f"Attempt {attempt+1} failed to fetch Message-ID: {e}")
 
                     if not message_id_header:
-                        st.warning(f"⚠️ Message-ID not found for {to_addr} (will remain blank).")
+                        st.warning(f"⚠️ Message-ID not found for {to_addr}. Try re-fetching later.")
 
                     # Apply label for new emails only
                     if send_mode == "🆕 New Email" and label_id:

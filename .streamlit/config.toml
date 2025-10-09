@@ -1,0 +1,17 @@
+[theme]
+primaryColor = "#007BFF"         # Brand blue
+backgroundColor = "#F8FAFC"      # Soft white background
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#1E293B"            # Dark navy-gray text
+font = "sans serif"
+
+[server]
+headless = true
+port = 8501
+enableCORS = false
+
+[browser]
+gatherUsageStats = false
+
+[client]
+toolbarMode = "minimal"

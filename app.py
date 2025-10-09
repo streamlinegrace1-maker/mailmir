@@ -71,18 +71,17 @@ def get_or_create_label(service, label_name="Mail Merge Sent"):
 # Bold + Link Converter
 # ========================================
 def convert_bold(text):
-    """
-    Converts **bold** syntax and [text](url) to working HTML.
-    Preserves spacing, line breaks, and Gmail-style link formatting.
-    """
     if not text:
         return ""
+    # Convert **bold**
     text = re.sub(r"\*\*(.*?)\*\*", r"<b>\1</b>", text)
+    # Convert [text](url)
     text = re.sub(
         r"\[(.*?)\]\((https?://[^\s)]+)\)",
         r'<a href="\2" style="color:#1a73e8; text-decoration:underline;" target="_blank">\1</a>',
         text,
     )
+    # Preserve line breaks
     text = text.replace("\n", "<br>").replace("  ", "&nbsp;&nbsp;")
     return f"""
     <html>
@@ -140,8 +139,7 @@ if uploaded_file:
 
     st.write("✅ Preview of uploaded data:")
     st.dataframe(df.head())
-
-    st.info("📌 Include a 'ThreadId' column if you want to send follow-ups as replies.")
+    st.info("📌 Include a 'ThreadId' and 'RfcMessageId' column for follow-ups if needed.")
 
     # ========================================
     # Email Template
@@ -184,11 +182,11 @@ Thanks,
     # Label & Delay Options
     # ========================================
     st.header("🏷️ Label & Timing Options")
-    label_name = st.text_input("Gmail label to apply", value="Mail Merge Sent")
+    label_name = st.text_input("Gmail label to apply (new emails only)", value="Mail Merge Sent")
     delay = st.number_input("Delay between emails (seconds)", min_value=0, max_value=60, value=2, step=1)
 
     # ========================================
-    # Send or Follow-up
+    # Send Mode
     # ========================================
     send_mode = st.radio("Choose sending mode", ["🆕 New Email", "↩️ Follow-up (Reply)"])
 
@@ -207,29 +205,46 @@ Thanks,
                 try:
                     subject = subject_template.format(**row)
                     body_html = convert_bold(body_template.format(**row))
-
                     message = MIMEText(body_html, "html")
                     message["to"] = to_addr
                     message["subject"] = subject
+
+                    # ===== Follow-up threading =====
                     raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
                     msg_body = {"raw": raw}
 
-                    if send_mode == "↩️ Follow-up (Reply)" and "ThreadId" in row:
+                    if send_mode == "↩️ Follow-up (Reply)" and "ThreadId" in row and "RfcMessageId" in row:
                         thread_id = str(row["ThreadId"]).strip()
+                        rfc_id = str(row["RfcMessageId"]).strip()
                         if thread_id and thread_id != "nan":
                             msg_body["threadId"] = thread_id
+                            if rfc_id:
+                                message["In-Reply-To"] = rfc_id
+                                message["References"] = rfc_id
+                            # Skip labeling for replies
+                            sent_msg = service.users().messages().send(userId="me", body=msg_body).execute()
+                        else:
+                            # Treat as new email if no thread info
+                            sent_msg = service.users().messages().send(userId="me", body=msg_body).execute()
+                            if label_id:
+                                service.users().messages().modify(
+                                    userId="me", id=sent_msg["id"], body={"addLabelIds": [label_id]}
+                                ).execute()
+                    else:
+                        # ===== New email =====
+                        sent_msg = service.users().messages().send(userId="me", body=msg_body).execute()
+                        if label_id:
+                            service.users().messages().modify(
+                                userId="me", id=sent_msg["id"], body={"addLabelIds": [label_id]}
+                            ).execute()
 
-                    sent_msg = service.users().messages().send(userId="me", body=msg_body).execute()
-
-                    if label_id:
-                        service.users().messages().modify(
-                            userId="me", id=sent_msg["id"], body={"addLabelIds": [label_id]}
-                        ).execute()
-
-                    # Save Thread ID back if new message
+                    # Save Thread ID and Message-ID back to CSV
                     if "ThreadId" not in df.columns:
                         df["ThreadId"] = None
+                    if "RfcMessageId" not in df.columns:
+                        df["RfcMessageId"] = None
                     df.loc[idx, "ThreadId"] = sent_msg.get("threadId", "")
+                    df.loc[idx, "RfcMessageId"] = sent_msg.get("id", "")
 
                     sent_count += 1
                     time.sleep(delay)
@@ -238,7 +253,7 @@ Thanks,
                     errors.append((to_addr, str(e)))
 
         # ========================================
-        # Summary + Thread ID Export
+        # Summary + CSV Export
         # ========================================
         st.success(f"✅ Successfully sent {sent_count} emails.")
         if skipped:
@@ -247,4 +262,6 @@ Thanks,
             st.error(f"❌ Failed to send {len(errors)} emails: {errors}")
 
         csv = df.to_csv(index=False).encode("utf-8")
-        st.download_button("⬇️ Download Updated CSV (with Thread IDs)", csv, "updated_mailmerge.csv", "text/csv")
+        st.download_button(
+            "⬇️ Download Updated CSV (with ThreadId + RfcMessageId)", csv, "updated_mailmerge.csv", "text/csv"
+        )

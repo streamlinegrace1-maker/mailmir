@@ -231,19 +231,25 @@ Thanks,
                     # Send the email
                     sent_msg = service.users().messages().send(userId="me", body=msg_body).execute()
 
-                    # Retrieve real RFC Message-ID
-                    msg_detail = service.users().messages().get(
-                        userId="me",
-                        id=sent_msg["id"],
-                        format="metadata",
-                        metadataHeaders=["Message-ID"],
-                    ).execute()
+                    # ✅ FIX: Wait & Retry to Fetch RFC Message-ID
+                    time.sleep(1.5)
+                    message_id_header = None
+                    for attempt in range(3):
+                        msg_detail = service.users().messages().get(
+                            userId="me",
+                            id=sent_msg["id"],
+                            format="metadata",
+                            metadataHeaders=["Message-ID"],
+                        ).execute()
 
-                    message_id_header = next(
-                        (h["value"] for h in msg_detail.get("payload", {}).get("headers", [])
-                         if h["name"] == "Message-ID"),
-                        None,
-                    )
+                        message_id_header = next(
+                            (h["value"] for h in msg_detail.get("payload", {}).get("headers", [])
+                             if h["name"] == "Message-ID"),
+                            None,
+                        )
+                        if message_id_header:
+                            break
+                        time.sleep(1.5)
 
                     # Apply label for new emails only
                     if send_mode == "🆕 New Email" and label_id:

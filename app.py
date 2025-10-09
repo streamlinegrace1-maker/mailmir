@@ -203,50 +203,64 @@ Thanks,
                     subject = subject_template.format(**row)
                     body_html = convert_bold(body_template.format(**row))
 
-                    # ===== New email or follow-up =====
                     message = MIMEText(body_html, "html")
                     message["To"] = to_addr
                     message["Subject"] = subject
 
                     msg_body = {}
 
+                    # ===== Follow-up (Reply) mode =====
                     if send_mode == "↩️ Follow-up (Reply)" and "ThreadId" in row and "RfcMessageId" in row:
                         thread_id = str(row["ThreadId"]).strip()
                         rfc_id = str(row["RfcMessageId"]).strip()
 
-                        if thread_id and thread_id != "nan" and rfc_id:
+                        if thread_id and thread_id.lower() != "nan" and rfc_id:
                             message["In-Reply-To"] = rfc_id
                             message["References"] = rfc_id
                             raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
                             msg_body = {"raw": raw, "threadId": thread_id}
                         else:
-                            # Fallback to new email
                             raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
                             msg_body = {"raw": raw}
-                            if label_id:
-                                # Label will be applied after send
-                                pass
+
+                    # ===== New Email Mode =====
                     else:
-                        # New email
                         raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
                         msg_body = {"raw": raw}
 
-                    # Send email
+                    # Send the email
                     sent_msg = service.users().messages().send(userId="me", body=msg_body).execute()
+
+                    # Retrieve real RFC Message-ID
+                    msg_detail = service.users().messages().get(
+                        userId="me",
+                        id=sent_msg["id"],
+                        format="metadata",
+                        metadataHeaders=["Message-ID"],
+                    ).execute()
+
+                    message_id_header = next(
+                        (h["value"] for h in msg_detail.get("payload", {}).get("headers", [])
+                         if h["name"] == "Message-ID"),
+                        None,
+                    )
 
                     # Apply label for new emails only
                     if send_mode == "🆕 New Email" and label_id:
+                        time.sleep(1)
                         service.users().messages().modify(
-                            userId="me", id=sent_msg["id"], body={"addLabelIds": [label_id]}
+                            userId="me",
+                            id=sent_msg["id"],
+                            body={"addLabelIds": [label_id]},
                         ).execute()
 
-                    # ===== Save ThreadId + Message-ID to CSV =====
+                    # ===== Save ThreadId + Real Message-ID =====
                     if "ThreadId" not in df.columns:
                         df["ThreadId"] = None
                     if "RfcMessageId" not in df.columns:
                         df["RfcMessageId"] = None
                     df.loc[idx, "ThreadId"] = sent_msg.get("threadId", "")
-                    df.loc[idx, "RfcMessageId"] = sent_msg.get("id", "")
+                    df.loc[idx, "RfcMessageId"] = message_id_header or ""
 
                     sent_count += 1
                     time.sleep(delay)
@@ -265,5 +279,8 @@ Thanks,
 
         csv = df.to_csv(index=False).encode("utf-8")
         st.download_button(
-            "⬇️ Download Updated CSV (with ThreadId + RfcMessageId)", csv, "updated_mailmerge.csv", "text/csv"
+            "⬇️ Download Updated CSV (with ThreadId + RfcMessageId)",
+            csv,
+            "updated_mailmerge.csv",
+            "text/csv",
         )

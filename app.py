@@ -232,35 +232,24 @@ else:
     progress = st.progress(0)
     status = st.empty()
 
-    # ========================================
-    # Fixed Backup Email Function
-    # ========================================
     def send_email_backup(service, csv_path):
         try:
             user_profile = service.users().getProfile(userId="me").execute()
             user_email = user_profile.get("emailAddress")
-
             msg = MIMEMultipart()
             msg["To"] = user_email
             msg["From"] = user_email
             msg["Subject"] = f"📁 Mail Merge Backup CSV - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-
-            # Email body
-            body_text = "Hello,\n\nYour Gmail Mail Merge backup CSV is attached.\n\nBest,\nMail Merge Tool"
-            msg.attach(MIMEText(body_text, "plain"))
-
-            # Attach CSV
+            body = MIMEText("Attached is your backup CSV file.", "plain")
+            msg.attach(body)
             with open(csv_path, "rb") as f:
-                part = MIMEApplication(f.read(), _subtype="csv")
-                part.add_header("Content-Disposition", "attachment", filename=os.path.basename(csv_path))
-                msg.attach(part)
-
+                part = MIMEApplication(f.read(), Name=os.path.basename(csv_path))
+            part["Content-Disposition"] = f'attachment; filename="{os.path.basename(csv_path)}"'
+            msg.attach(part)
             raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
             service.users().messages().send(userId="me", body={"raw": raw}).execute()
-            st.success("✅ Backup CSV sent to your Gmail inbox.")
-
         except Exception as e:
-            st.warning(f"⚠️ Backup email failed to send: {e}")
+            st.warning(f"Backup email failed: {e}")
 
     label_id = get_or_create_label(service, label_name)
     sent_count, errors = 0, []
@@ -302,8 +291,6 @@ else:
     df.to_csv(file_path, index=False)
     st.success(f"✅ Completed! Sent {sent_count}/{len(df)} emails.")
     st.download_button("⬇️ Download Updated CSV", open(file_path, "rb"), file_name=file_name)
-
-    # Send backup CSV to yourself
     send_email_backup(service, file_path)
 
     if st.button("⬅ Back to Mail Merge"):

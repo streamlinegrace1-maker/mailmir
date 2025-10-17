@@ -1,4 +1,4 @@
-#auto CSV download removed 
+# include csv download for all three mode
 import streamlit as st
 import pandas as pd
 import base64
@@ -214,8 +214,7 @@ Thanks,
             total_seconds = total_contacts * avg_delay
             total_minutes = total_seconds / 60
 
-            # Local timezone
-            local_tz = pytz.timezone("Asia/Kolkata")  # change if needed
+            local_tz = pytz.timezone("Asia/Kolkata")
             now_local = datetime.now(local_tz)
             eta_start = now_local
             eta_end = now_local + timedelta(seconds=total_seconds)
@@ -362,18 +361,22 @@ Thanks,
             st.error(f"❌ Failed to process {len(errors)}: {errors}")
 
         # ========================================
-        # CSV Download only for New Email mode
+        # CSV Download for All Modes
         # ========================================
-        if send_mode == "🆕 New Email":
-            csv = df.to_csv(index=False).encode("utf-8")
-            safe_label = re.sub(r'[^A-Za-z0-9_-]', '_', label_name)
-            file_name = f"{safe_label}.csv"
+        csv = df.to_csv(index=False).encode("utf-8")
+        safe_label = re.sub(r'[^A-Za-z0-9_-]', '_', label_name)
+        mode_suffix = {
+            "🆕 New Email": "new",
+            "↩️ Follow-up (Reply)": "followup",
+            "💾 Save as Draft": "draft"
+        }.get(send_mode, "result")
 
-            # Visible download button
-            st.download_button(
-                "⬇️ Download Updated CSV (Click if not auto-downloaded)",
-                csv,
-                file_name,
-                "text/csv",
-                key="manual_download"
-            )
+        file_name = f"{safe_label}_{mode_suffix}.csv"
+
+        st.download_button(
+            "⬇️ Download Updated CSV (includes ThreadId & RfcMessageId)",
+            csv,
+            file_name,
+            "text/csv",
+            key="manual_download"
+        )

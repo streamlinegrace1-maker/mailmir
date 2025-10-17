@@ -1,3 +1,4 @@
+#auto CSV download removed 
 import streamlit as st
 import pandas as pd
 import base64
@@ -248,6 +249,7 @@ Thanks,
         skipped, errors = [], []
 
         with st.spinner("📨 Processing emails... please wait."):
+
             if "ThreadId" not in df.columns:
                 df["ThreadId"] = None
             if "RfcMessageId" not in df.columns:
@@ -374,16 +376,4 @@ Thanks,
                 file_name,
                 "text/csv",
                 key="manual_download"
-            )
-
-            # Auto-download via hidden link
-            b64 = base64.b64encode(csv).decode()
-            st.markdown(
-                f'''
-                <a id="auto-download-link" href="data:file/csv;base64,{b64}" download="{file_name}"></a>
-                <script>
-                    document.getElementById("auto-download-link").click();
-                </script>
-                ''',
-                unsafe_allow_html=True
             )

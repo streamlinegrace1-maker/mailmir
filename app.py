@@ -1,4 +1,4 @@
-# include csv download for all three mode
+#auto CSV download removed + file upload error fixed
 import streamlit as st
 import pandas as pd
 import base64
@@ -136,10 +136,25 @@ st.info("⚠️ Upload maximum of **70–80 contacts** for smooth operation and 
 uploaded_file = st.file_uploader("Upload CSV or Excel file", type=["csv", "xlsx"])
 
 if uploaded_file:
+    # ✅ Robust CSV/Excel reading with multiple fallbacks
     if uploaded_file.name.endswith("csv"):
-        df = pd.read_csv(uploaded_file)
+        try:
+            df = pd.read_csv(uploaded_file, encoding="utf-8")
+        except UnicodeDecodeError:
+            uploaded_file.seek(0)
+            df = pd.read_csv(uploaded_file, encoding="ISO-8859-1")
+        except pd.errors.EmptyDataError:
+            st.error("❌ Uploaded CSV appears empty or corrupted. Please check the file.")
+            st.stop()
+        except pd.errors.ParserError:
+            uploaded_file.seek(0)
+            df = pd.read_csv(uploaded_file, sep=None, engine="python")
     else:
-        df = pd.read_excel(uploaded_file)
+        try:
+            df = pd.read_excel(uploaded_file)
+        except Exception:
+            st.error("❌ Unable to read Excel file. Please verify the format.")
+            st.stop()
 
     st.write("✅ Preview of uploaded data:")
     st.dataframe(df.head())
@@ -177,7 +192,6 @@ Thanks,
             preview_body = body_template.format(**preview_row)
             preview_html = convert_bold(preview_body)
 
-            # Subject line preview in Verdana
             st.markdown(
                 f'<span style="font-family: Verdana, sans-serif; font-size:16px;"><b>Subject:</b> {preview_subject}</span>',
                 unsafe_allow_html=True
@@ -203,7 +217,7 @@ Thanks,
     )
 
     # ========================================
-    # ✅ "Ready to Send" Button + ETA (All Modes)
+    # ✅ "Ready to Send" Button + ETA
     # ========================================
     eta_ready = st.button("🕒 Ready to Send / Calculate ETA")
 
@@ -216,23 +230,18 @@ Thanks,
 
             local_tz = pytz.timezone("Asia/Kolkata")
             now_local = datetime.now(local_tz)
-            eta_start = now_local
             eta_end = now_local + timedelta(seconds=total_seconds)
-
-            eta_start_str = eta_start.strftime("%I:%M %p")
-            eta_end_str = eta_end.strftime("%I:%M %p")
 
             st.success(
                 f"📋 Total Recipients: {total_contacts}\n\n"
                 f"⏳ Estimated Duration: {total_minutes:.1f} min (±10%)\n\n"
-                f"🕒 ETA Window: **{eta_start_str} – {eta_end_str}** (Local Time)\n\n"
-                f"✅ Applies to all send modes: New, Follow-up, Draft"
+                f"🕒 ETA Window: **{now_local.strftime('%I:%M %p')} – {eta_end.strftime('%I:%M %p')}** (Local Time)"
             )
         except Exception as e:
             st.warning(f"ETA calculation failed: {e}")
 
     # ========================================
-    # Send Mode (with Save Draft)
+    # Send Mode
     # ========================================
     send_mode = st.radio(
         "Choose sending mode",
@@ -286,9 +295,7 @@ Thanks,
                         raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
                         msg_body = {"raw": raw}
 
-                    # ===============================
                     # ✉️ Send or Save as Draft
-                    # ===============================
                     if send_mode == "💾 Save as Draft":
                         draft = service.users().drafts().create(userId="me", body={"message": msg_body}).execute()
                         sent_msg = draft.get("message", {})
@@ -296,7 +303,6 @@ Thanks,
                     else:
                         sent_msg = service.users().messages().send(userId="me", body=msg_body).execute()
 
-                    # 🕒 Delay between operations
                     if delay > 0:
                         time.sleep(random.uniform(delay * 0.9, delay * 1.1))
 
@@ -311,7 +317,6 @@ Thanks,
                                 format="metadata",
                                 metadataHeaders=["Message-ID"],
                             ).execute()
-
                             headers = msg_detail.get("payload", {}).get("headers", [])
                             for h in headers:
                                 if h.get("name", "").lower() == "message-id":
@@ -322,9 +327,8 @@ Thanks,
                         except Exception:
                             continue
 
-                    # 🏷️ Apply label to new emails
+                    # 🏷️ Apply label
                     if send_mode == "🆕 New Email" and label_id and sent_msg.get("id"):
-                        success = False
                         for attempt in range(3):
                             try:
                                 service.users().messages().modify(
@@ -332,12 +336,9 @@ Thanks,
                                     id=sent_msg["id"],
                                     body={"addLabelIds": [label_id]},
                                 ).execute()
-                                success = True
                                 break
                             except Exception:
                                 time.sleep(1)
-                        if not success:
-                            st.warning(f"⚠️ Could not apply label to {to_addr}")
 
                     df.loc[idx, "ThreadId"] = sent_msg.get("threadId", "")
                     df.loc[idx, "RfcMessageId"] = message_id_header or ""
@@ -361,22 +362,17 @@ Thanks,
             st.error(f"❌ Failed to process {len(errors)}: {errors}")
 
         # ========================================
-        # CSV Download for All Modes
+        # CSV Download (Manual)
         # ========================================
-        csv = df.to_csv(index=False).encode("utf-8")
-        safe_label = re.sub(r'[^A-Za-z0-9_-]', '_', label_name)
-        mode_suffix = {
-            "🆕 New Email": "new",
-            "↩️ Follow-up (Reply)": "followup",
-            "💾 Save as Draft": "draft"
-        }.get(send_mode, "result")
+        if send_mode == "🆕 New Email":
+            csv = df.to_csv(index=False).encode("utf-8")
+            safe_label = re.sub(r'[^A-Za-z0-9_-]', '_', label_name)
+            file_name = f"{safe_label}.csv"
 
-        file_name = f"{safe_label}_{mode_suffix}.csv"
-
-        st.download_button(
-            "⬇️ Download Updated CSV (includes ThreadId & RfcMessageId)",
-            csv,
-            file_name,
-            "text/csv",
-            key="manual_download"
-        )
+            st.download_button(
+                "⬇️ Download Updated CSV (Click if not auto-downloaded)",
+                csv,
+                file_name,
+                "text/csv",
+                key="manual_download"
+            )

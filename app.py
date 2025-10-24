@@ -196,20 +196,17 @@ if not st.session_state["sending"]:
         else:
             df = pd.read_excel(uploaded_file)
 
-        # Add columns if missing
+        # Add missing columns
         for col in ["ThreadId", "RfcMessageId", "Status"]:
             if col not in df.columns:
                 df[col] = ""
 
-        # Auto resume from first unsent row
-        pending_rows = df[df["Status"] != "Sent"]
-        if not pending_rows.empty:
-            df = pending_rows.reset_index(drop=True)
-
-        st.dataframe(df.head())
         st.info("📌 Include 'ThreadId' and 'RfcMessageId' columns for follow-ups if needed.")
         df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
 
+        # ---------------------------
+        # Template Editor
+        # ---------------------------
         subject_template = st.text_input("Subject", "Hello {Name}")
         body_template = st.text_area(
             "Body",
@@ -225,10 +222,35 @@ Thanks,
         delay = st.slider("Delay (seconds)", 20, 75, 20)
         send_mode = st.radio("Choose mode", ["🆕 New Email", "↩️ Follow-up (Reply)", "💾 Save as Draft"])
 
+        # ---------------------------
+        # Gmail Template Preview (Below Editor)
+        # ---------------------------
+        if not df.empty:
+            preview_row = df.iloc[0]
+            try:
+                preview_subject = subject_template.format(**preview_row)
+                preview_body = convert_bold(body_template.format(**preview_row))
+            except Exception as e:
+                preview_subject = subject_template
+                preview_body = body_template
+                st.warning(f"⚠️ Could not render preview: {e}")
+
+            st.markdown("### 👀 Preview (First Row)")
+            st.markdown(f"**Subject:** {preview_subject}")
+            st.markdown(preview_body, unsafe_allow_html=True)
+
+        # ---------------------------
+        # Send Button (fixed)
+        # ---------------------------
         if st.button("🚀 Send Emails / Save Drafts"):
+            df = df.reset_index(drop=True)
+            df = df.fillna("")
+            pending_indices = df.index[df["Status"] != "Sent"].tolist()
+
             st.session_state.update({
                 "sending": True,
                 "df": df,
+                "pending_indices": pending_indices,
                 "subject_template": subject_template,
                 "body_template": body_template,
                 "label_name": label_name,
@@ -238,10 +260,11 @@ Thanks,
             st.rerun()
 
 # ========================================
-# Sending Mode
+# Sending Mode with Batch Labeling
 # ========================================
 if st.session_state["sending"]:
     df = st.session_state["df"]
+    pending_indices = st.session_state["pending_indices"]
     subject_template = st.session_state["subject_template"]
     body_template = st.session_state["body_template"]
     label_name = st.session_state["label_name"]
@@ -256,19 +279,20 @@ if st.session_state["sending"]:
     if send_mode == "🆕 New Email":
         label_id = get_or_create_label(service, label_name)
 
-    total = len(df)
+    total = len(pending_indices)
     sent_count, skipped, errors = 0, [], []
 
     batch_count = 0
-    for idx, row in df.iterrows():
-        if send_mode != "💾 Save as Draft" and batch_count >= BATCH_SIZE_DEFAULT:
-            break  # Stop after 50 messages
-        if row.get("Status") == "Sent":
-            continue
+    sent_message_ids = []
 
-        pct = int(((idx + 1) / total) * 100)
+    for i, idx in enumerate(pending_indices):
+        if send_mode != "💾 Save as Draft" and batch_count >= BATCH_SIZE_DEFAULT:
+            break
+        row = df.loc[idx]
+
+        pct = int(((i + 1) / total) * 100)
         progress.progress(min(max(pct, 0), 100))
-        status_box.info(f"Processing {idx + 1}/{total}")
+        status_box.info(f"Processing {i + 1}/{total}")
 
         to_addr = extract_email(str(row.get("Email", "")).strip())
         if not to_addr:
@@ -300,10 +324,9 @@ if st.session_state["sending"]:
                 msg_body = {"raw": raw}
 
             if send_mode == "💾 Save as Draft":
-                draft = service.users().drafts().create(userId="me", body={"message": msg_body}).execute()
-                df.loc[idx, "ThreadId"] = draft.get("message", {}).get("threadId", "")
-                df.loc[idx, "RfcMessageId"] = draft.get("message", {}).get("id", "")
+                service.users().drafts().create(userId="me", body={"message": msg_body}).execute()
                 df.loc[idx, "Status"] = "Draft"
+                time.sleep(random.uniform(delay * 0.9, delay * 1.1))
             else:
                 sent_msg = service.users().messages().send(userId="me", body=msg_body).execute()
                 msg_id = sent_msg.get("id", "")
@@ -311,37 +334,40 @@ if st.session_state["sending"]:
                 df.loc[idx, "RfcMessageId"] = fetch_message_id_header(service, msg_id) or msg_id
                 df.loc[idx, "Status"] = "Sent"
                 if send_mode == "🆕 New Email" and label_id:
-                    try:
-                        service.users().messages().modify(
-                            userId="me", id=msg_id, body={"addLabelIds": [label_id]}
-                        ).execute()
-                    except Exception:
-                        pass
+                    sent_message_ids.append(msg_id)
+                time.sleep(random.uniform(delay * 0.9, delay * 1.1))
+
             sent_count += 1
             batch_count += 1
-            if send_mode != "💾 Save as Draft":
-                time.sleep(random.uniform(delay * 0.9, delay * 1.1))
         except Exception as e:
             df.loc[idx, "Status"] = "Error"
             errors.append((to_addr, str(e)))
             st.error(f"Error for {to_addr}: {e}")
 
-    progress.progress(100)
+    # Apply batch label & CSV backup
+    if send_mode != "💾 Save as Draft":
+        if sent_message_ids and label_id:
+            try:
+                service.users().messages().batchModify(
+                    userId="me",
+                    body={"ids": sent_message_ids, "addLabelIds": [label_id]}
+                ).execute()
+            except Exception as e:
+                st.warning(f"Batch labeling failed: {e}")
 
-    # Save and backup
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    safe_label = re.sub(r'[^A-Za-z0-9_-]', '_', label_name)
-    file_name = f"Updated_{safe_label}_{timestamp}.csv"
-    file_path = os.path.join("/tmp", file_name)
-    df.to_csv(file_path, index=False)
+        # Save and backup
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe_label = re.sub(r'[^A-Za-z0-9_-]', '_', label_name)
+        file_name = f"Updated_{safe_label}_{timestamp}.csv"
+        file_path = os.path.join("/tmp", file_name)
+        df.to_csv(file_path, index=False)
+        try:
+            send_email_backup(service, file_path)
+        except Exception as e:
+            st.warning(f"Backup email failed: {e}")
 
-    try:
-        send_email_backup(service, file_path)
-    except Exception as e:
-        st.warning(f"Backup email failed: {e}")
-
-    with open(DONE_FILE, "w") as f:
-        json.dump({"done_time": str(datetime.now()), "file": file_path}, f)
+        with open(DONE_FILE, "w") as f:
+            json.dump({"done_time": str(datetime.now()), "file": file_path}, f)
 
     st.session_state["sending"] = False
     st.session_state["done"] = True
@@ -358,16 +384,6 @@ if st.session_state["done"]:
         st.error(f"❌ {len(summary['errors'])} errors occurred.")
     if summary.get("skipped"):
         st.warning(f"⚠️ Skipped: {summary['skipped']}")
-    with open(DONE_FILE, "r") as f:
-        done_info = json.load(f)
-    file_path = done_info.get("file")
-    if file_path and os.path.exists(file_path):
-        st.download_button(
-            "⬇️ Download Updated CSV",
-            data=open(file_path, "rb"),
-            file_name=os.path.basename(file_path),
-            mime="text/csv",
-        )
     if st.button("🔁 New Run / Reset"):
         if os.path.exists(DONE_FILE):
             os.remove(DONE_FILE)

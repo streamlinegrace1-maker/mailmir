@@ -270,8 +270,8 @@ if not st.session_state["sending"]:
         df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
 
         st.markdown("---")
-        subject_template = st.text_input("✉️ Subject", "Hello {Name}")
-        body_template = st.text_area("📝 Body (Markdown)", "Dear {Name},\n\nWelcome to Mail Merge Demo.\n\nThanks,", height=200)
+        subject_template = st.text_input("✉️ Subject", "{Company Name}")
+        body_template = st.text_area("📝 Body (Markdown)", "Dear {First Name},\n\nWelcome to Mail Merge Demo.\n\nThanks,", height=200)
         label_name = st.text_input("🏷️ Gmail label", "Mail Merge Sent")
         delay = st.slider("⏱️ Delay (seconds)", 20, 75, 25)
         send_mode = st.radio("📬 Mode", ["🆕 New Email", "↩️ Follow-up (Reply)", "💾 Save as Draft"])

@@ -276,6 +276,22 @@ if not st.session_state["sending"]:
         delay = st.slider("⏱️ Delay (seconds)", 20, 75, 25)
         send_mode = st.radio("📬 Mode", ["🆕 New Email", "↩️ Follow-up (Reply)", "💾 Save as Draft"])
 
+        # ===============================
+        # Preview First Email Feature
+        # ===============================
+        preview_first = st.checkbox("👀 Preview First Email", value=False)
+        if preview_first and not df.empty:
+            first_row = df.iloc[0]
+            try:
+                subject_preview = subject_template.format(**first_row)
+                body_preview = convert_bold(body_template.format(**first_row))
+                st.markdown("### ✉️ Preview of First Email")
+                st.markdown(f"**Subject:** {subject_preview}")
+                st.markdown("**Body:**")
+                st.markdown(body_preview, unsafe_allow_html=True)
+            except Exception as e:
+                st.error(f"⚠️ Could not generate preview: {e}")
+
         if st.button("🚀 Start Mail Merge"):
             if is_lock_active():
                 st.error("⚠️ Run lock exists. Reset before starting new run.")

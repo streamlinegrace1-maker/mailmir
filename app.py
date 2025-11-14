@@ -312,7 +312,7 @@ if not st.session_state["sending"]:
 
         # label, delay, send mode
         label_name = st.text_input("🏷️ Gmail label", "Mail Merge Sent")
-        delay = st.slider("⏱️ Delay between emails (seconds)", 5, 120, 20)
+        delay = st.slider("⏱️ Delay between emails (seconds)", 20, 75, 20)
         send_mode = st.radio("📬 Choose send mode", ["🆕 New Email", "↩️ Follow-up (Reply)", "💾 Save as Draft"])
 
         # Preview using first row

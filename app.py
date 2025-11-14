@@ -299,7 +299,7 @@ if not st.session_state["sending"]:
             st.session_state.body_template = FOLLOW_UP_TEMPLATES[selected_template]
 
         # Subject template (single subject field). If you want per-follow subjects, I can add that.
-        subject_template = st.text_input("✉️ Subject", st.session_state.get("subject_template", "{Name Company}"))
+        subject_template = st.text_input("✉️ Subject", st.session_state.get("subject_template", "{Company Name}"))
         st.session_state["subject_template"] = subject_template  # persist
 
         body_template = st.text_area(

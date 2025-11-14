@@ -78,35 +78,49 @@ DRAFT_BATCH_SIZE_DEFAULT = 110  # default for draft mode
 # ========================================
 FOLLOW_UP_TEMPLATES = {
     "Follow 1": """Hi {First Name},
+
 Hope you’ve been doing well. Would you like to get a **few sample contacts** to check our list accuracy?
+
 Please let me know your requirements.
+
 Thanks,
 **Grace**
-Business Development Manager | Streamline Data""",
+Business Development Manager | Streamline Data
+""",
 
 "Follow 2": """Hi {First Name},
+
 Have you reviewed my previous email? 
+
 Let me know your thoughts.
+
 Thanks,
 **Grace**
-Business Development Manager | Streamline Data """,
+Business Development Manager | Streamline Data
+""",
 
-    "Follow 3": """ Hi {First Name},
+    "Follow 3": """  Hi {First Name},
 
 I wanted to circle back on my last message. Would you like to see a **few sample contacts** to have an idea on our database
 
 Looking forward to hearing from you.
+
 Thanks,
 **Grace**
-Business Development Manager | Streamline Data""",
+Business Development Manager | Streamline Data
+""",
+
 
     "Follow 4": """Hi {First Name},
 
 This is my final follow , **May be you're missed my previous Mails**  if you’d like me to send over a sample list of verified  decision-makers for your review.
+
 Looking forward to your response.
+
 Thanks,
 **Grace**
-Business Development Manager | Streamline Data """,
+Business Development Manager | Streamline Data
+""",
 }
 
 # ========================================
@@ -299,7 +313,7 @@ if not st.session_state["sending"]:
             st.session_state.body_template = FOLLOW_UP_TEMPLATES[selected_template]
 
         # Subject template (single subject field). If you want per-follow subjects, I can add that.
-        subject_template = st.text_input("✉️ Subject", st.session_state.get("subject_template", "{Company Name}"))
+        subject_template = st.text_input("✉️ Subject", st.session_state.get("subject_template", "{Name Company}"))
         st.session_state["subject_template"] = subject_template  # persist
 
         body_template = st.text_area(
@@ -312,7 +326,7 @@ if not st.session_state["sending"]:
 
         # label, delay, send mode
         label_name = st.text_input("🏷️ Gmail label", "Mail Merge Sent")
-        delay = st.slider("⏱️ Delay between emails (seconds)", 20, 75, 20)
+        delay = st.slider("⏱️ Delay between emails (seconds)", 5, 120, 20)
         send_mode = st.radio("📬 Choose send mode", ["🆕 New Email", "↩️ Follow-up (Reply)", "💾 Save as Draft"])
 
         # Preview using first row
